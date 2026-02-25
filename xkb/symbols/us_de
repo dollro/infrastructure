@@ -1,0 +1,34 @@
+// this file goes to /usr/share/X11/xkb/symbols/us_de
+
+default
+partial alphanumeric_keys modifier_keys 
+
+// xkb custom symbol definition
+// modified: xkb_symbols 
+
+partial alphanumeric_keys
+xkb_symbols "euro" {
+
+    name[Group1]= "English (US, DE variant)";
+
+    include "us(basic)"
+
+    include "eurosign(5)"
+
+
+    key <AD01> { [	   q,          Q,    aacute,       Aacute ] };
+
+    key <AD03> { [	   e,          E,        eacute,           Eacute ] };
+
+    key <AD06> { [	   y,          Y,    uacute,       Uacute ] };
+    key <AD07> { [	   u,          U,    udiaeresis,       Udiaeresis ] };
+    key <AD08> { [	   i,          I,        iacute,           Iacute ] };
+    key <AD09> { [	   o,          O,    odiaeresis,       Odiaeresis ] };
+    key <AD10> { [	   p,          P,        oacute,           Oacute ] };
+    key <AC01> { [	   a,          A,     adiaeresis,       Adiaeresis] };
+    key <AC02> { [	   s,          S,        ssharp,          section ] };
+ 
+    include "level3(ralt_switch)"
+};
+
+

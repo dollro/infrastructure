@@ -1,6 +1,6 @@
 ---
 name: agent-team
-description: Build a project using Claude Code Agent Teams with built-in team orchestration. Takes a plan document path and optional team size. Use when you want multiple agents collaborating on a build.
+description: Build a project using Claude Code Agent Teams with tmux split panes and built-in team orchestration. Takes a plan document path and optional team size. Use when you want multiple agents collaborating on a build.
 argument-hint: [plan-path] [num-agents]
 disable-model-invocation: true
 ---
@@ -10,6 +10,33 @@ disable-model-invocation: true
 You are coordinating a build using Claude Code Agent Teams. Your job is to understand the project, design a team, define contracts, spawn agents in parallel, and orchestrate the build.
 
 You use the built-in team orchestration tools: `TeamCreate` for team setup, `TaskCreate`/`TaskUpdate`/`TaskList` for task tracking, `Task` with `team_name`/`name` for spawning teammates, and `SendMessage` for communication.
+
+Agents are spawned in **tmux split panes** so each agent is visible in its own terminal pane, allowing real-time parallel visualization of all agents working simultaneously.
+
+## Prerequisites
+
+Before starting, verify tmux is available and agent teams are enabled:
+
+1. **tmux must be installed** — run `tmux -V` to verify. If not installed:
+   - macOS: `brew install tmux`
+   - Ubuntu/Debian: `sudo apt update && sudo apt install tmux`
+   - Fedora/RHEL: `sudo dnf install tmux`
+   - Windows: Requires WSL — native Windows is not supported
+
+2. **Agent teams must be enabled** — the environment variable `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` must be set to `1`. Check `~/.claude/settings.json`:
+   ```json
+   {
+     "env": {
+       "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+     }
+   }
+   ```
+   Or export in shell profile (`~/.bashrc` / `~/.zshrc`):
+   ```bash
+   export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+   ```
+
+> **tmux note:** Starting a tmux session opens a new shell that does not inherit environment variables from your current terminal. If you enable agent teams via `export`, you must add it to your shell profile (`~/.bashrc` / `~/.zshrc`) so it loads automatically inside tmux. The `settings.json` approach avoids this issue entirely.
 
 ## Arguments
 
@@ -48,7 +75,19 @@ If you determine a single agent is sufficient, say so and proceed without the te
 
 ---
 
-## Step 3: Determine Team Structure
+## Step 3: Set Up tmux Visualization
+
+Enable tmux split panes so each agent is visible working in its own terminal pane:
+
+```
+teammateMode: "tmux"
+```
+
+This gives you real-time parallel visibility into all agents working simultaneously. Each agent gets its own tmux pane, allowing you to monitor progress visually while coordinating through the team orchestration tools.
+
+---
+
+## Step 4: Determine Team Structure
 
 If team size is specified (`$ARGUMENTS[1]`), use that number. Otherwise, derive it from the plan.
 
@@ -69,7 +108,7 @@ If team size is specified (`$ARGUMENTS[1]`), use that number. Otherwise, derive 
 
 ---
 
-## Step 4: Create Team and Tasks
+## Step 5: Create Team and Tasks
 
 ### Create the Team
 
@@ -108,7 +147,7 @@ Since contracts are defined upfront, implementation tasks have no inter-agent bl
 
 ---
 
-## Step 5: Define Contracts
+## Step 6: Define Contracts
 
 This is the critical step that makes parallel work possible. Agents building in parallel will diverge on interfaces unless they start with agreed-upon contracts.
 
@@ -181,11 +220,11 @@ This is just one example. Your project may have completely different boundaries 
 
 ---
 
-## Step 6: Spawn All Agents in Parallel
+## Step 7: Spawn All Agents in Parallel
 
 With contracts defined and tasks created, spawn all agents simultaneously using the `Task` tool with `team_name` and `name` parameters. Each agent receives full context to build independently from the start.
 
-Enter **Delegate Mode** before spawning. You should not implement code yourself — your role is coordination.
+Enter **Delegate Mode** (Shift+Tab) before spawning. You should not implement code yourself — your role is coordination. Each agent will appear in its own tmux split pane for real-time monitoring.
 
 ### Spawning
 
@@ -252,7 +291,7 @@ After spawning, use `TaskUpdate` with `owner` to assign each task to the corresp
 
 ---
 
-## Step 7: Facilitate Collaboration
+## Step 8: Facilitate Collaboration
 
 All agents work in parallel. Your job as lead:
 
@@ -293,7 +332,7 @@ Each agent reviews another agent's work at the integration boundary:
 
 ---
 
-## Step 8: Validation
+## Step 9: Validation
 
 Validation happens at two levels: **agent-level** and **lead-level**.
 
@@ -323,7 +362,7 @@ If validation fails:
 
 ---
 
-## Step 9: Shutdown and Cleanup
+## Step 10: Shutdown and Cleanup
 
 Once the build is validated and complete:
 
@@ -342,6 +381,9 @@ Once the build is validated and complete:
 5. **Orphaned cross-cutting concerns** — Nobody owns shared behaviors → explicitly assign each one
 6. **Agents don't communicate** — Issues discovered but not relayed → require explicit handoffs via lead
 7. **Missing project context** — Agents ignore existing patterns → include CLAUDE.md conventions in spawn prompts
+8. **Implicit contracts** — "The API returns sessions" is ambiguous → require exact JSON shapes, URLs with trailing slashes, status codes
+9. **Per-chunk storage** — Backend stores each streamed text chunk as a separate DB row → frontend renders N bubbles on reload. Accumulate chunks into single rows
+10. **Hidden UI elements** — CSS `opacity-0` on interactive elements → invisible to automation. Add aria-labels, ensure keyboard/focus visibility
 
 ---
 
@@ -399,19 +441,21 @@ The build is complete when:
 
 Now begin:
 
-1. Read `CLAUDE.md` and `docs/index.md` (if they exist) to understand the project
-2. Read the plan at `$ARGUMENTS[0]`
-3. Assess whether agent teams are needed (Step 2)
-4. Determine team structure (use `$ARGUMENTS[1]` if provided)
-5. Define agent roles, ownership, and contracts — derived from the actual project architecture
-6. Use `TeamCreate` to create the team
-7. Use `TaskCreate` for each deliverable, with `addBlockedBy` for integration tasks
-8. Enter Delegate Mode
-9. Spawn all agents in parallel with `Task` (using `team_name`, `name`, `subagent_type`) with contracts and validation checklists
-10. Assign tasks to agents with `TaskUpdate` `owner`
-11. Monitor via `TaskList`, relay messages with `SendMessage`, mediate contract changes
-12. Run contract diff before integration
-13. When all tasks show completed, run end-to-end validation
-14. If validation fails, `SendMessage` to the relevant agent and `resume` them
-15. Shut down agents with `shutdown_request`, then `TeamDelete`
-16. Confirm the build meets the plan's requirements
+1. Verify prerequisites — check `tmux -V` is available and `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is set
+2. Read `CLAUDE.md` and `docs/index.md` (if they exist) to understand the project
+3. Read the plan at `$ARGUMENTS[0]`
+4. Assess whether agent teams are needed (Step 2)
+5. Determine team structure (use `$ARGUMENTS[1]` if provided)
+6. Set up tmux visualization with `teammateMode: "tmux"`
+7. Define agent roles, ownership, and contracts — derived from the actual project architecture
+8. Use `TeamCreate` to create the team
+9. Use `TaskCreate` for each deliverable, with `addBlockedBy` for integration tasks
+10. Enter Delegate Mode (Shift+Tab)
+11. Spawn all agents in parallel with `Task` (using `team_name`, `name`, `subagent_type`) — each appears in its own tmux pane
+12. Assign tasks to agents with `TaskUpdate` `owner`
+13. Monitor agents visually in tmux panes and via `TaskList`, relay messages with `SendMessage`, mediate contract changes
+14. Run contract diff before integration
+15. When all tasks show completed, run end-to-end validation
+16. If validation fails, `SendMessage` to the relevant agent and `resume` them
+17. Shut down agents with `shutdown_request`, then `TeamDelete`
+18. Confirm the build meets the plan's requirements
