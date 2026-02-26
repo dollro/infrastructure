@@ -1,15 +1,13 @@
 ---
 name: agent-team
-description: Build a project using Claude Code Agent Teams with zellij monitoring. Use when the user wants multiple agents collaborating on a build, mentions "agent team", "parallel build", "swarm", or asks to split work across agents.
+description: Build a project using Claude Code Agent Teams. Use when the user wants multiple agents collaborating on a build, mentions "agent team", "parallel build", "swarm", or asks to split work across agents.
 ---
 
 # Build with Agent Team
 
 You are the **lead agent** coordinating a parallel build using Claude Code Agent Teams. Your role is strictly coordination — you do NOT write code yourself. You design a team with contracts, spawn teammates, and orchestrate their work.
 
-Agents run via the `in-process` backend (invisible). **Zellij** provides the monitoring dashboard — you open it as a tab before spawning agents.
-
-For exact API syntax, message formats, and debugging, see [REFERENCE.md](REFERENCE.md).
+For exact API syntax and message formats, see [REFERENCE.md](REFERENCE.md).
 
 ## Prerequisites
 
@@ -20,51 +18,66 @@ For exact API syntax, message formats, and debugging, see [REFERENCE.md](REFEREN
 grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" ~/.claude/settings.json 2>/dev/null \
     && echo "✅ Agent teams enabled" \
     || echo "❌ Add CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 to ~/.claude/settings.json"
-
-# Inside zellij?
-[ -n "$ZELLIJ" ] \
-    && echo "✅ Inside zellij" \
-    || echo "❌ Not in zellij — monitoring won't work. Ask user to start zellij first."
-
-# jq available?
-command -v jq &>/dev/null \
-    && echo "✅ jq installed" \
-    || echo "❌ Install jq (apt install jq)"
-
-# Monitor scripts exist?
-SKILL_SCRIPTS="$(find ~/.claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
-[ -z "$SKILL_SCRIPTS" ] && SKILL_SCRIPTS="$(find .claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
-[ -n "$SKILL_SCRIPTS" ] \
-    && echo "✅ Monitor scripts at $SKILL_SCRIPTS" \
-    || echo "❌ Monitor scripts not found — skill not installed correctly"
-
-chmod +x "$SKILL_SCRIPTS"/*.sh 2>/dev/null
-```
-
-**If not inside zellij, tell the user:**
-```
-Start zellij first, then run claude inside it:
-  zellij
-  claude --dangerously-skip-permissions
-The --dangerously-skip-permissions flag auto-approves tool use so agent
-teammates can edit files without prompting. It only affects this session.
 ```
 
 ### Tool Permissions
 
-Agents inherit the parent's permission model. Without auto-approval, every file edit by every agent triggers a confirmation prompt, making parallel work impossible.
+Agents inherit the parent's permission model. Without auto-approval, every file edit by every agent triggers a confirmation prompt.
 
 **Check if permissions are handled:**
-- If the user started with `claude --dangerously-skip-permissions` → good, proceed.
-- Otherwise, tell them to press **Shift+Tab** (Delegate Mode) for this session.
+- If the user started with `claude --dangerously-skip-permissions` → good.
+- Otherwise tell them to press **Shift+Tab** (Delegate Mode) which both auto-approves tools AND prevents the lead from coding directly — the correct mode for team coordination.
 
 **Wait for confirmation before spawning agents.**
+
+### Optional: Zellij Monitoring Dashboard
+
+If the user is running inside zellij (`$ZELLIJ` is set), you can open a supplementary monitoring tab showing task states and inbox activity. This is **optional** — the built-in agent controls (see below) are the primary way to observe agents.
+
+```bash
+if [ -n "$ZELLIJ" ]; then
+    SKILL_SCRIPTS="$(find ~/.claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
+    [ -z "$SKILL_SCRIPTS" ] && SKILL_SCRIPTS="$(find .claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
+    if [ -n "$SKILL_SCRIPTS" ]; then
+        chmod +x "$SKILL_SCRIPTS"/*.sh 2>/dev/null
+        cat > /tmp/agent-monitor.kdl << KDL
+layout {
+    pane split_direction="vertical" {
+        pane name="Tasks" size="50%" command="${SKILL_SCRIPTS}/watch-tasks.sh"
+        pane split_direction="horizontal" size="50%" {
+            pane name="Leader Inbox" command="${SKILL_SCRIPTS}/watch-inbox.sh"
+            pane name="Team Members" command="${SKILL_SCRIPTS}/watch-team.sh"
+        }
+    }
+}
+KDL
+        zellij action new-tab --layout /tmp/agent-monitor.kdl -n "Agent Monitor"
+        echo "✅ Zellij monitor tab opened"
+    fi
+fi
+```
 
 ## Inputs
 
 The user provides:
-- **Plan path** — path to a markdown file describing what to build (ask if not provided)
+- **Plan path** — path to a markdown plan file describing what to build (ask if not provided)
 - **Team size** — number of agents (optional, derive from plan if not specified)
+
+---
+
+## How to Observe and Control Agents
+
+Agents run in-process. You observe them through **built-in keyboard controls** in the lead terminal:
+
+| Key | Action |
+|-----|--------|
+| **Shift+Down / Shift+Up** | Cycle through teammates — select one |
+| **Enter** | View the selected teammate's live session (full output, reasoning, file edits) |
+| **Escape** | Go back to the lead / interrupt a teammate's turn |
+| **Ctrl+T** | Toggle the task list overlay |
+| **Shift+Tab** | Toggle Delegate Mode (lead can only coordinate, not code) |
+
+**This is how you watch agents work.** You see their full reasoning, tool calls, and file edits in real-time — just navigate to them with Shift+Down then Enter.
 
 ---
 
@@ -80,36 +93,7 @@ Then read the plan file. Identify: what are we building, what are the major comp
 
 Use a **single agent** if the work is linear or touches few files. Use **agent teams** if there are 2+ independent components with clear boundaries. Say so if solo is sufficient.
 
-## Phase 3: Open Zellij Monitoring — MANDATORY
-
-**Execute this to open the monitoring dashboard.** The KDL layout references the bundled `scripts/watch-*.sh` files.
-
-```bash
-# Find the skill's scripts directory
-SKILL_SCRIPTS="$(find ~/.claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
-[ -z "$SKILL_SCRIPTS" ] && SKILL_SCRIPTS="$(find .claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
-
-# Generate the KDL layout pointing to the scripts
-cat > /tmp/agent-monitor.kdl << KDL
-layout {
-    pane split_direction="vertical" {
-        pane name="Tasks" size="50%" command="${SKILL_SCRIPTS}/watch-tasks.sh"
-        pane split_direction="horizontal" size="50%" {
-            pane name="Leader Inbox" command="${SKILL_SCRIPTS}/watch-inbox.sh"
-            pane name="Team Members" command="${SKILL_SCRIPTS}/watch-team.sh"
-        }
-    }
-}
-KDL
-
-# Open as a new zellij tab
-zellij action new-tab --layout /tmp/agent-monitor.kdl -n "Agent Monitor"
-echo "✅ Monitor tab opened"
-```
-
-**Verify the tab appeared.** If it failed, you're not inside zellij — STOP.
-
-## Phase 4: Design Team Structure
+## Phase 3: Design Team Structure
 
 If the user specified a team size, use it. Otherwise derive from the plan.
 
@@ -126,7 +110,7 @@ If the user specified a team size, use it. Otherwise derive from the plan.
   - `Plan` — read-only, best for architecture
   - `Bash` — bash only, best for commands/git
 
-## Phase 5: Define Contracts BEFORE Spawning
+## Phase 4: Define Contracts BEFORE Spawning
 
 At each integration boundary, define:
 - **Exact interface** — function signatures, endpoints, data shapes
@@ -137,14 +121,14 @@ Identify **cross-cutting concerns** and assign each to exactly one agent.
 
 **Quality check:** Could two agents build to this independently and integrate on the first try?
 
-## Phase 6: Create Team, Tasks, and Spawn
+## Phase 5: Create Team, Tasks, and Spawn
 
-### 6a. Create the Team
+### 5a. Create the Team
 ```
 Teammate({ operation: "spawnTeam", team_name: "project-build", description: "Building [what]" })
 ```
 
-### 6b. Create Tasks with Dependencies
+### 5b. Create Tasks with Dependencies
 ```
 TaskCreate({ subject: "Implement backend", description: "...", activeForm: "Building backend..." })
 TaskCreate({ subject: "Implement frontend", description: "...", activeForm: "Building frontend..." })
@@ -152,7 +136,14 @@ TaskCreate({ subject: "Integration test", description: "...", activeForm: "Testi
 TaskUpdate({ taskId: "3", addBlockedBy: ["1", "2"] })
 ```
 
-### 6c. Spawn All Agents in Parallel
+### 5c. Enter Delegate Mode
+
+Press **Shift+Tab** to enter Delegate Mode. This:
+- Auto-approves tool use for all agents (solves the permission prompt problem)
+- Restricts YOUR tools to coordination only (no Edit, Write, Bash) — you can only spawn, message, manage tasks, and shutdown
+- This is the correct mode for team coordination
+
+### 5d. Spawn All Agents in Parallel
 
 Spawn each with `team_name` + `name` + `run_in_background: true`. Include full context:
 
@@ -196,19 +187,21 @@ Do NOT mark complete until all pass.`
 })
 ```
 
-Repeat for each agent.
+Repeat for each agent. After spawning, use **Shift+Down** and **Enter** to watch each agent working live.
 
-## Phase 7: Orchestrate
+## Phase 6: Orchestrate
 
+- **Watch agents live** — Shift+Down to select, Enter to view their session
+- **Check task list** — Ctrl+T to toggle the task list overlay
 - **Relay contract issues** — `Teammate({ operation: "write", target_agent_id: "...", value: "..." })`
 - **Broadcast sparingly** — `Teammate({ operation: "broadcast", name: "team-lead", value: "..." })` sends N messages
-- **Track progress** — `TaskList()` + check the zellij Tasks pane
+- **Track progress** — `TaskList()` or Ctrl+T
 - **Idle agents are normal** — send a message to wake them
 
 ### Contract Verification Before Integration
 Ask each agent what interfaces they implemented. Compare both sides. Flag mismatches.
 
-## Phase 8: Validate
+## Phase 7: Validate
 
 After `TaskList()` shows all complete:
 1. Can the system start?
@@ -218,7 +211,7 @@ After `TaskList()` shows all complete:
 
 If failed, message the relevant agent — it wakes from idle.
 
-## Phase 9: Shutdown and Cleanup
+## Phase 8: Shutdown and Cleanup
 
 ```
 Teammate({ operation: "requestShutdown", target_agent_id: "backend", reason: "Build complete" })
@@ -231,9 +224,9 @@ Teammate({ operation: "cleanup" })
 
 ## Common Pitfalls
 
-1. **Permission prompts blocking agents** — start with `--dangerously-skip-permissions` or Shift+Tab. Do NOT add permanent permissions to `.claude/settings.json`.
-2. **Skipping monitoring** — agents run invisibly → Phase 3 is mandatory
-3. **Lead coding** — stay in coordination role
+1. **Permission prompts blocking agents** — enter Delegate Mode (Shift+Tab) before spawning
+2. **Lead coding instead of coordinating** — Delegate Mode prevents this (removes Edit/Write/Bash from lead)
+3. **Can't see agent output** — use Shift+Down then Enter to view any agent's live session
 4. **Spawning without contracts** — define ALL contracts first
 5. **Vague contracts** — require exact JSON shapes, not prose
 6. **Broadcasting everything** — use targeted `write`
@@ -244,19 +237,20 @@ Teammate({ operation: "cleanup" })
 
 ## Execute
 
-1. **Run prerequisite checks** — confirm all ✅
-2. **STOP if not in zellij** — tell user to start `zellij` then `claude --dangerously-skip-permissions`
-3. **Tool permissions** — confirm `--dangerously-skip-permissions` or Shift+Tab active. **Wait for user.**
-4. **Read project context** — `CLAUDE.md`, `docs/index.md`
-5. **Read the plan**
-6. **Assess team vs solo**
-7. **⚡ Open zellij monitoring** (Phase 3) — execute the bash block, confirm tab appeared
-8. **Design team + define contracts**
-9. **Create team**: `Teammate({ operation: "spawnTeam", ... })`
-10. **Create tasks** + dependencies
+1. **Prerequisites** — verify agent teams enabled
+2. **Tool permissions** — confirm `--dangerously-skip-permissions` or Delegate Mode. **Wait for user.**
+3. **Read project context** — `CLAUDE.md`, `docs/index.md`
+4. **Read the plan**
+5. **Assess team vs solo**
+6. **Optionally** open zellij monitoring tab (if in zellij)
+7. **Design team + define contracts**
+8. **Create team**: `Teammate({ operation: "spawnTeam", ... })`
+9. **Create tasks** + dependencies
+10. **Enter Delegate Mode** (Shift+Tab)
 11. **Spawn all agents** with `run_in_background: true`
-12. **Monitor** via `TaskList()` + zellij, relay messages, mediate contracts
-13. **Contract diff** before integration
-14. **End-to-end validation**
-15. **Shutdown** → `cleanup`
-16. **Confirm** build meets the plan
+12. **Watch agents work** — Shift+Down, Enter to view live sessions
+13. **Orchestrate** — relay messages, mediate contracts, check Ctrl+T task list
+14. **Contract diff** before integration
+15. **End-to-end validation**
+16. **Shutdown** → `cleanup`
+17. **Confirm** build meets the plan
