@@ -1,151 +1,139 @@
 ---
 name: agent-team
-description: Build a project using Claude Code Agent Teams. Use when the user wants multiple agents collaborating on a build, mentions "agent team", "parallel build", "swarm", or asks to split work across agents.
+description: Orchestrate Claude Code Agent Teams with contract-first design and dynamic teammate specialization. Use when the user wants multiple agents collaborating on a build, mentions "agent team", "parallel build", "swarm", or asks to split work across agents. Also trigger when a plan file mentions 3+ independent components, or when the user says "team build", "parallel agents", or "coordinate agents". This skill adds structure that Claude Code doesn't provide natively — interface contracts, dynamic skill injection, and quality gates.
 ---
 
-# Build with Agent Team
+# Agent Team Orchestration
 
-You are the **lead agent** coordinating a parallel build using Claude Code Agent Teams. Your role is strictly coordination — you do NOT write code yourself. You design a team with contracts, spawn teammates, and orchestrate their work.
+You are the **lead agent** coordinating a parallel build. Your role is strictly coordination — you do NOT write code yourself. You design contracts, compose specialized prompts for each teammate, spawn them, and orchestrate their work.
 
-For exact API syntax and message formats, see [REFERENCE.md](REFERENCE.md).
+> **What this skill adds over vanilla agent teams:** Claude Code's built-in agent teams handle spawning, messaging, task lists, and display. This skill adds three things the built-in system doesn't enforce: (1) contract-first interface design, (2) dynamic teammate specialization via skill/context injection, and (3) structured quality gates before integration.
 
-## Prerequisites
+## Quick Start
 
-**Execute this check block first:**
-
-```bash
-# Agent teams enabled?
-grep -q "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" ~/.claude/settings.json 2>/dev/null \
-    && echo "✅ Agent teams enabled" \
-    || echo "❌ Add CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 to ~/.claude/settings.json"
-```
-
-### Tool Permissions
-
-Agents inherit the parent's permission model. Without auto-approval, every file edit by every agent triggers a confirmation prompt.
-
-**Check if permissions are handled:**
-- If the user started with `claude --dangerously-skip-permissions` → good.
-- Otherwise tell them to press **Shift+Tab** (Delegate Mode) which both auto-approves tools AND prevents the lead from coding directly — the correct mode for team coordination.
-
-**Wait for confirmation before spawning agents.**
-
-### Optional: Zellij Monitoring Dashboard
-
-If the user is running inside zellij (`$ZELLIJ` is set), you can open a supplementary monitoring tab showing task states and inbox activity. This is **optional** — the built-in agent controls (see below) are the primary way to observe agents.
-
-```bash
-if [ -n "$ZELLIJ" ]; then
-    SKILL_SCRIPTS="$(find ~/.claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
-    [ -z "$SKILL_SCRIPTS" ] && SKILL_SCRIPTS="$(find .claude/skills -path '*/agent-team/scripts/watch-tasks.sh' 2>/dev/null | head -1 | xargs dirname 2>/dev/null)"
-    if [ -n "$SKILL_SCRIPTS" ]; then
-        chmod +x "$SKILL_SCRIPTS"/*.sh 2>/dev/null
-        cat > /tmp/agent-monitor.kdl << KDL
-layout {
-    pane split_direction="vertical" {
-        pane name="Tasks" size="50%" command="${SKILL_SCRIPTS}/watch-tasks.sh"
-        pane split_direction="horizontal" size="50%" {
-            pane name="Leader Inbox" command="${SKILL_SCRIPTS}/watch-inbox.sh"
-            pane name="Team Members" command="${SKILL_SCRIPTS}/watch-team.sh"
-        }
-    }
-}
-KDL
-        zellij action new-tab --layout /tmp/agent-monitor.kdl -n "Agent Monitor"
-        echo "✅ Zellij monitor tab opened"
-    fi
-fi
-```
-
-## Inputs
-
-The user provides:
-- **Plan path** — path to a markdown plan file describing what to build (ask if not provided)
-- **Team size** — number of agents (optional, derive from plan if not specified)
-
----
-
-## How to Observe and Control Agents
-
-Agents run in-process. You observe them through **built-in keyboard controls** in the lead terminal:
-
-| Key | Action |
-|-----|--------|
-| **Shift+Down / Shift+Up** | Cycle through teammates — select one |
-| **Enter** | View the selected teammate's live session (full output, reasoning, file edits) |
-| **Escape** | Go back to the lead / interrupt a teammate's turn |
-| **Ctrl+T** | Toggle the task list overlay |
-| **Shift+Tab** | Toggle Delegate Mode (lead can only coordinate, not code) |
-
-**This is how you watch agents work.** You see their full reasoning, tool calls, and file edits in real-time — just navigate to them with Shift+Down then Enter.
+Ensure agent teams are enabled (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in settings.json or environment). Then enter **Delegate Mode** (Shift+Tab) before spawning — this auto-approves tool use and restricts the lead to coordination only.
 
 ---
 
 ## Phase 1: Understand the Project
 
-1. Read `CLAUDE.md` at the project root (if it exists) — conventions, tech stack, build/test commands
-2. Read `docs/index.md` (if it exists) — architecture, module structure
-3. Scan the directory structure and key files
+1. Read `CLAUDE.md` (conventions, stack, build/test commands)
+2. Scan directory structure and key files
+3. Read the plan file (ask for one if not provided)
+4. Identify: what are we building, what are the major components, what are the dependencies between them
 
-Then read the plan file. Identify: what are we building, what are the major components, what are the dependencies, is this greenfield or extending existing code.
+## Phase 2: Team or Solo?
 
-## Phase 2: Decide on Team vs Solo
+Use a **single agent** (or subagents) if work is linear or touches few files. Use **agent teams** only when there are 2+ independent components with clear boundaries AND teammates need to coordinate. Say so if solo is sufficient — teams burn ~3-5x tokens.
 
-Use a **single agent** if the work is linear or touches few files. Use **agent teams** if there are 2+ independent components with clear boundaries. Say so if solo is sufficient.
+| Use subagents when | Use agent teams when |
+|---|---|
+| Quick focused tasks that report back | Workers need to share findings and coordinate |
+| Independent research/analysis | Cross-layer changes (frontend + backend + tests) |
+| One-off searches | Competing hypotheses / parallel exploration |
 
-## Phase 3: Design Team Structure
+## Phase 3: Design Contracts BEFORE Anything Else
 
-If the user specified a team size, use it. Otherwise derive from the plan.
+**This is the most important phase.** Do not spawn agents until contracts are fully defined.
 
-**Sizing:** 2 agents for two independent layers, 3 for three distinct areas, 4+ for large systems.
+At every integration boundary between teammates, define:
 
-**For each agent define:**
-- **Name** — short, descriptive (e.g., `backend`, `auth-service`, `ui`)
-- **Ownership** — exact files/directories they own exclusively
-- **Off-limits** — files they must NOT touch
-- **Responsibilities** — what they build from the plan
-- **Agent type** (`subagent_type`):
-  - `general-purpose` — full tools, best for implementation
-  - `Explore` — read-only, haiku model, best for search/research
-  - `Plan` — read-only, best for architecture
-  - `Bash` — bash only, best for commands/git
+### Interface Contract Template
+```
+## Contract: [boundary-name] (e.g., "API ↔ Frontend")
 
-## Phase 4: Define Contracts BEFORE Spawning
+### Data Shapes (concrete, not prose)
+// Request
+{ userId: string, filters: { status: "active" | "inactive", limit: number } }
 
-At each integration boundary, define:
-- **Exact interface** — function signatures, endpoints, data shapes
-- **Exact data structures** — concrete examples in code/JSON, NOT prose
-- **Error/edge cases**
+// Response  
+{ users: Array<{ id: string, name: string, email: string }>, total: number }
 
-Identify **cross-cutting concerns** and assign each to exactly one agent.
+### Endpoints / Function Signatures
+GET /api/users?status=active&limit=20 → UsersResponse
+POST /api/users → { id: string }
 
-**Quality check:** Could two agents build to this independently and integrate on the first try?
+### Error Cases
+- 400: { error: "INVALID_FILTER", message: string }
+- 404: { error: "NOT_FOUND" }
 
-## Phase 5: Create Team, Tasks, and Spawn
+### Assumptions
+- Auth token in Authorization header (Bearer)
+- Dates as ISO 8601 strings
+```
 
-### 5a. Create the Team
+**Quality check:** Could two developers build to this contract independently and integrate on the first try? If not, the contract isn't specific enough.
+
+Rules:
+- **Exact JSON shapes**, not prose descriptions
+- **Concrete examples** for every data structure
+- **Error/edge cases** enumerated
+- **Cross-cutting concerns** (auth, logging, error handling) assigned to exactly one teammate
+- Identify **shared types/interfaces** — create a contract file that both sides import
+
+## Phase 4: Design Team & Specialize Teammates
+
+### Sizing
+- 2 agents for two independent layers
+- 3 for three distinct areas
+- 4+ for large systems (rare — prefer fewer, focused agents)
+
+### Dynamic Specialization
+
+Each teammate should receive a **task-specific prompt** composed from:
+
+1. **Project context** — from CLAUDE.md and docs
+2. **Ownership scope** — exact files/dirs they own and must NOT touch
+3. **Relevant contracts** — what they produce and consume
+4. **Domain expertise** — pull from project skills, CLAUDE.md conventions, or inject inline expertise relevant to their specific task
+
+**Key insight:** Don't give every teammate the same generic prompt. A backend agent building a REST API needs different expertise than a frontend agent wiring up React components. Compose each prompt to match the task:
+
+```
+## Teammate: backend
+## Domain expertise to inject:
+- REST API conventions from CLAUDE.md
+- Database migration patterns from docs/
+- Error handling standards
+
+## Teammate: frontend  
+## Domain expertise to inject:
+- Component structure conventions
+- State management patterns
+- Accessibility requirements
+```
+
+If the project has relevant skills installed (e.g., testing frameworks, deployment patterns), reference them in the teammate's prompt so they load the right context.
+
+### Agent Types
+
+Pick the right type for each role:
+
+| Type | Tools | Best For |
+|------|-------|----------|
+| `general-purpose` | All | Implementation work |
+| `Explore` | Read-only (haiku) | Research, codebase search |
+| `Plan` | Read-only | Architecture, design review |
+| `Bash` | Bash only | Git operations, build commands |
+
+## Phase 5: Spawn
+
+### 5a. Create Team + Tasks
 ```
 Teammate({ operation: "spawnTeam", team_name: "project-build", description: "Building [what]" })
-```
 
-### 5b. Create Tasks with Dependencies
-```
-TaskCreate({ subject: "Implement backend", description: "...", activeForm: "Building backend..." })
+TaskCreate({ subject: "Implement backend API", description: "...", activeForm: "Building backend..." })
 TaskCreate({ subject: "Implement frontend", description: "...", activeForm: "Building frontend..." })
-TaskCreate({ subject: "Integration test", description: "...", activeForm: "Testing..." })
+TaskCreate({ subject: "Integration test", description: "...", activeForm: "Testing integration..." })
 TaskUpdate({ taskId: "3", addBlockedBy: ["1", "2"] })
 ```
 
-### 5c. Enter Delegate Mode
+### 5b. Enter Delegate Mode
+Press **Shift+Tab** before spawning teammates.
 
-Press **Shift+Tab** to enter Delegate Mode. This:
-- Auto-approves tool use for all agents (solves the permission prompt problem)
-- Restricts YOUR tools to coordination only (no Edit, Write, Bash) — you can only spawn, message, manage tasks, and shutdown
-- This is the correct mode for team coordination
+### 5c. Spawn Each Teammate with Full Context
 
-### 5d. Spawn All Agents in Parallel
-
-Spawn each with `team_name` + `name` + `run_in_background: true`. Include full context:
+Each spawn prompt must include:
 
 ```
 Task({
@@ -156,62 +144,65 @@ Task({
   prompt: `You are the backend agent.
 
 ## Project Context
-[From CLAUDE.md]
+[Key conventions from CLAUDE.md — tech stack, build/test commands]
 
 ## Your Ownership
-- You own: [dirs/files]
-- Do NOT touch: [other agents' files]
+- You own: src/api/, src/db/, src/middleware/
+- Do NOT touch: src/components/, src/pages/, tests/e2e/
 
-## What You're Building
-[From plan]
+## Contracts You PRODUCE
+[Paste exact contract — the interfaces other agents consume from you]
 
-## Contracts
-### You Produce
-[Exact spec] — message the lead if you need to deviate:
-Teammate({ operation: "write", target_agent_id: "team-lead", value: "..." })
+If you need to deviate from a contract, message the lead FIRST:
+Teammate({ operation: "write", target_agent_id: "team-lead", value: "Proposing change to GET /api/users: ..." })
 
-### You Consume
-[Exact spec] — build against this exactly
+## Contracts You CONSUME  
+[Paste exact contract — what you build against]
 
-### Cross-Cutting Concerns You Own
-[Shared behaviors assigned to you]
+## Cross-Cutting Concerns You Own
+[e.g., error handling middleware, auth token validation]
+
+## Domain Context
+[Injected expertise relevant to THIS agent's task]
 
 ## Task
 Claim: TaskUpdate({ taskId: "1", owner: "backend", status: "in_progress" })
 Done: TaskUpdate({ taskId: "1", status: "completed" })
 
-## Validate Before Done
-1. [build/test/lint command]
-2. [acceptance check]
+## Before Marking Done
+1. Run: [build command]
+2. Run: [test command]  
+3. Verify contract compliance — do your exports match the agreed shapes?
 Do NOT mark complete until all pass.`
 })
 ```
 
-Repeat for each agent. After spawning, use **Shift+Down** and **Enter** to watch each agent working live.
-
 ## Phase 6: Orchestrate
 
-- **Watch agents live** — Shift+Down to select, Enter to view their session
-- **Check task list** — Ctrl+T to toggle the task list overlay
-- **Relay contract issues** — `Teammate({ operation: "write", target_agent_id: "...", value: "..." })`
-- **Broadcast sparingly** — `Teammate({ operation: "broadcast", name: "team-lead", value: "..." })` sends N messages
-- **Track progress** — `TaskList()` or Ctrl+T
-- **Idle agents are normal** — send a message to wake them
+Use built-in controls to monitor:
+- **Shift+Down/Up** → cycle through teammates
+- **Enter** → view selected teammate's live session
+- **Ctrl+T** → toggle task list overlay
+- **Escape** → back to lead
 
-### Contract Verification Before Integration
-Ask each agent what interfaces they implemented. Compare both sides. Flag mismatches.
+Your orchestration responsibilities:
+- **Watch for contract deviations** — if a teammate messages about changing an interface, evaluate the change and relay to affected teammates
+- **Mediate conflicts** — if two agents touch shared ground, resolve immediately
+- **Unblock** — if a teammate is stuck, send targeted context via `Teammate({ operation: "write", ... })`
+- **Prefer targeted messages over broadcasts** — broadcasts cost N messages for N teammates
 
-## Phase 7: Validate
+## Phase 7: Contract Verification & Integration
 
-After `TaskList()` shows all complete:
-1. Can the system start?
-2. Does the happy path work?
-3. Do integrations connect?
-4. Are edge cases handled?
+Before declaring victory:
 
-If failed, message the relevant agent — it wakes from idle.
+1. **Contract diff** — Ask each agent what interfaces they actually implemented. Compare both sides. Flag mismatches.
+2. **Build check** — Does the system start?
+3. **Happy path** — Does the primary use case work end-to-end?
+4. **Edge cases** — Are error cases from contracts handled?
 
-## Phase 8: Shutdown and Cleanup
+If something fails, message the relevant teammate — idle agents wake when messaged.
+
+## Phase 8: Shutdown
 
 ```
 Teammate({ operation: "requestShutdown", target_agent_id: "backend", reason: "Build complete" })
@@ -222,35 +213,54 @@ Teammate({ operation: "cleanup" })
 
 ---
 
-## Common Pitfalls
+## Optional: Quality Gate Hooks
 
-1. **Permission prompts blocking agents** — enter Delegate Mode (Shift+Tab) before spawning
-2. **Lead coding instead of coordinating** — Delegate Mode prevents this (removes Edit/Write/Bash from lead)
-3. **Can't see agent output** — use Shift+Down then Enter to view any agent's live session
-4. **Spawning without contracts** — define ALL contracts first
-5. **Vague contracts** — require exact JSON shapes, not prose
-6. **Broadcasting everything** — use targeted `write`
-7. **Missing project context** — include CLAUDE.md in spawn prompts
-8. **Orphaned cross-cutting concerns** — assign each to one agent
+For recurring projects, set up hooks in `.claude/settings.json` to enforce quality automatically:
+
+```json
+{
+  "hooks": {
+    "TaskCompleted": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "scripts/verify-contracts.sh $TASK_ID"
+      }]
+    }],
+    "TeammateIdle": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "scripts/check-idle-reason.sh $AGENT_NAME"
+      }]
+    }]
+  }
+}
+```
+
+- **TaskCompleted** — exit code 2 prevents completion and sends feedback (e.g., "tests not passing")
+- **TeammateIdle** — exit code 2 sends feedback to keep teammate working (e.g., "review your contract compliance before going idle")
 
 ---
 
-## Execute
+## Common Pitfalls
 
-1. **Prerequisites** — verify agent teams enabled
-2. **Tool permissions** — confirm `--dangerously-skip-permissions` or Delegate Mode. **Wait for user.**
-3. **Read project context** — `CLAUDE.md`, `docs/index.md`
-4. **Read the plan**
-5. **Assess team vs solo**
-6. **Optionally** open zellij monitoring tab (if in zellij)
-7. **Design team + define contracts**
-8. **Create team**: `Teammate({ operation: "spawnTeam", ... })`
-9. **Create tasks** + dependencies
-10. **Enter Delegate Mode** (Shift+Tab)
-11. **Spawn all agents** with `run_in_background: true`
-12. **Watch agents work** — Shift+Down, Enter to view live sessions
-13. **Orchestrate** — relay messages, mediate contracts, check Ctrl+T task list
-14. **Contract diff** before integration
-15. **End-to-end validation**
-16. **Shutdown** → `cleanup`
-17. **Confirm** build meets the plan
+1. **Spawning without contracts** — the #1 cause of integration failures. Define ALL contracts first.
+2. **Vague contracts** — if it's prose instead of JSON shapes, it's not specific enough.
+3. **Generic teammate prompts** — specialize each prompt to the agent's actual task and domain.
+4. **Lead coding instead of coordinating** — use Delegate Mode (Shift+Tab) to prevent this.
+5. **Orphaned cross-cutting concerns** — auth, logging, error handling must each be assigned to exactly one agent.
+6. **Broadcasting everything** — use targeted `write` messages; broadcasts cost N messages.
+7. **Too many agents** — start with 2-3. More agents = more coordination overhead + token cost.
+
+---
+
+## Orchestration Patterns
+
+**Parallel Specialists** (most common) — Contracts first → spawn all → parallel build → integration test.
+
+**Pipeline** — Sequential tasks via `addBlockedBy`. Each stage needs the previous output.
+
+**Research → Implement** — Use synchronous `Explore` subagent for research first, then feed findings into teammate spawn prompts.
+
+**Review Swarm** — Multiple reviewers (security, performance, architecture) examine the same code in parallel and report findings to lead for synthesis.
