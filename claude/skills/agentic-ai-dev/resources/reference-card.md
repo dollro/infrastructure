@@ -40,6 +40,7 @@
 │  OBSERVABILITY:                                                         │
 │    Langfuse: CrewAIInstrumentor (OTel) + CallbackHandler (LangGraph)   │
 │    Session: propagate_attributes(session_id=document_id)               │
+│    v4: span.update(input=,output=) — update_trace() REMOVED            │
 │    Flush: langfuse.flush() before process exit                         │
 │                                                                         │
 │  TESTING:                                                               │

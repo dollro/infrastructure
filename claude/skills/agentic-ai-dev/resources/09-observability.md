@@ -58,6 +58,32 @@ with langfuse.start_as_current_observation(
 langfuse.flush()
 ```
 
+## Langfuse v4 Breaking Changes (v4.0+)
+
+### `update_trace()` removed from spans
+
+In Langfuse v3, you could call `span.update_trace(name=, input=, output=)` to set trace-level metadata from a span. **This method was removed in v4.**
+
+**v3 (broken in v4):**
+```python
+root_span.update(name=trace_name)
+root_span.update_trace(name=trace_name, input={...}, output={...})
+```
+
+**v4 migration:**
+```python
+root_span.update(name=trace_name, input={...}, output={...})
+```
+
+- `root_span.update()` sets I/O on the root span — functionally equivalent in the Langfuse UI
+- For trace-level name: use `propagate_attributes(trace_name=...)` context manager
+- `set_trace_io(input=, output=)` exists but is deprecated and will be removed
+
+### Available span methods in v4
+- `update(name=, input=, output=, metadata=, ...)` — update the span
+- `propagate_attributes(trace_name=, session_id=, tags=, ...)` — set trace-level attributes
+- `set_trace_io(input=, output=)` — deprecated, use `update()` on root span instead
+
 ## Trace Hierarchy (What You See in Langfuse Dashboard)
 
 ```

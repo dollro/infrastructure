@@ -88,7 +88,7 @@ uv add crewai langfuse langchain "pydantic-ai-slim[openai]" openinference-instru
 |-----------|---------|-------------|-----------|-------|
 | **Python** | 3.11 | 3.12 | `>=3.11` | 3.10 has known issues with Langfuse+LangGraph |
 | **CrewAI** | 1.10.0 | Latest | `>=1.10.0` | Unified Memory with scopes |
-| **Langfuse** | 3.0.0 | Latest | `>=3.0.0` | v3 = OTel rewrite (June 2025) |
+| **Langfuse** | 3.0.0 | Latest | `>=3.0.0` | v3 = OTel rewrite; v4 removes `update_trace()` from spans |
 | **langchain** | 1.2.0 | Latest | `>=1.2.0` | Required for `langfuse.langchain.CallbackHandler` |
 | **LangGraph** | 1.0.8 | Latest | (via langchain) | Auto-installed as langchain dep since 1.2 |
 | **langchain-core** | 1.2.0 | Latest | (via langchain) | Message types, callbacks |
@@ -140,6 +140,17 @@ if langchain.__version__.startswith("1"):
 **Issue**: CrewAI core is langchain-free. But if you use `crewai-tools` (separate package) with LangChain-wrapped tools (e.g., `langchain_community.utilities.GoogleSerperAPIWrapper`), you'll need `langchain-community` installed.
 
 **Solution**: Use CrewAI's native tools where possible. Only install `langchain-community` if you need specific LangChain tool wrappers.
+
+### 7. Langfuse v3 → v4 Span API Migration
+
+**Issue**: Langfuse v4 (4.0.0+) removes `update_trace()` from `LangfuseSpan`. Code calling `span.update_trace(name=, input=, output=)` raises `AttributeError` at runtime.
+
+**Solution**: Replace `update_trace()` calls:
+- `span.update(input=, output=)` — sets I/O on the span (equivalent in the dashboard)
+- `propagate_attributes(trace_name=)` — sets the trace-level name
+- `set_trace_io(input=, output=)` exists but is deprecated; prefer `update()` on the root span
+
+See `resources/09-observability.md` § "Langfuse v4 Breaking Changes" for full details.
 
 ## Package Variants Cheat Sheet
 

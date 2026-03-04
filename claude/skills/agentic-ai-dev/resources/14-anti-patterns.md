@@ -24,6 +24,7 @@
 | Using `pydantic-ai` (full) | Pulls ALL provider SDKs (~500MB) | Use `pydantic-ai-slim[openai]` |
 | Installing Langfuse before CrewAI | OTel resolves to 1.39.x, breaks CrewAI's ~=1.34.0 | Install CrewAI first or use lockfile |
 | Listing `langgraph` separately | `langchain>=1.2` already bundles langgraph | Let langchain pull it |
+| `span.update_trace(...)` in Langfuse v4 | Removed — `AttributeError` at runtime | Use `span.update(input=, output=)` + `propagate_attributes(trace_name=)` |
 
 ## Performance Optimization Guidelines
 
