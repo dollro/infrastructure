@@ -41,10 +41,11 @@
 │  │   └── langgraph-sdk                                                        │
 │  └── pydantic >=2.7.4,<3.0                                                   │
 │                                                                              │
-│  pydantic-ai-slim[openai] >=0.0.50  ← slim = no unused provider SDKs        │
+│  pydantic-ai-slim[openrouter] >=1.0.0  ← lean: only OpenRouter provider      │
+│  OR pydantic-ai >=1.0.0               ← full: all providers included        │
 │  ├── pydantic-graph                                                           │
 │  ├── genai-prices                                                             │
-│  ├── openai (via [openai] extra)                                              │
+│  ├── openai (via openrouter extra, or bundled in full)                        │
 │  └── (NO langchain, NO OTel)                                                 │
 │                                                                              │
 │  openinference-instrumentation-crewai                                        │
@@ -70,8 +71,11 @@ pip install "langfuse>=3.0.0"
 #    Also pulls langchain-core + langgraph (since langchain >=1.2)
 pip install "langchain>=1.2.0"
 
-# 4. Pydantic AI slim — no OTel/langchain deps
-pip install "pydantic-ai-slim[openai]>=0.0.50"
+# 4. Pydantic AI — no OTel/langchain deps.
+#    Lean (OpenRouter only):
+pip install "pydantic-ai-slim[openrouter]>=1.0.0"
+#    Or full (all providers):
+# pip install "pydantic-ai>=1.0.0"
 
 # 5. OTel bridge for CrewAI → Langfuse
 pip install "openinference-instrumentation-crewai"
@@ -79,7 +83,9 @@ pip install "openinference-instrumentation-crewai"
 
 With `uv` (recommended for speed and deterministic resolution):
 ```bash
-uv add crewai langfuse langchain "pydantic-ai-slim[openai]" openinference-instrumentation-crewai
+uv add crewai langfuse langchain "pydantic-ai-slim[openrouter]" openinference-instrumentation-crewai
+# Or with full pydantic-ai (all providers):
+# uv add crewai langfuse langchain pydantic-ai openinference-instrumentation-crewai
 ```
 
 ## Version Compatibility Matrix
@@ -93,7 +99,7 @@ uv add crewai langfuse langchain "pydantic-ai-slim[openai]" openinference-instru
 | **LangGraph** | 1.0.8 | Latest | (via langchain) | Auto-installed as langchain dep since 1.2 |
 | **langchain-core** | 1.2.0 | Latest | (via langchain) | Message types, callbacks |
 | **Pydantic** | 2.5 | 2.11+ | `>=2.5` | v2 required for `model_dump(mode='json')` |
-| **Pydantic AI** | 0.0.50 | Latest | `>=0.0.50` | Use `-slim[openai]` variant |
+| **Pydantic AI** | 1.0.0 | Latest | `>=1.0.0` | `pydantic-ai-slim[openrouter]` (lean) or `pydantic-ai` (all providers) |
 | **OTel API** | 1.33.1 | 1.34.x | (via crewai) | CrewAI pins ~=1.34.0 |
 
 ## Known Compatibility Issues
@@ -127,7 +133,7 @@ if langchain.__version__.startswith("1"):
 
 **Issue**: `pydantic-ai` (full) installs ALL provider SDKs: anthropic, boto3, cohere, google-genai, groq, mistralai, etc. This is ~500MB+ of dependencies you likely don't need.
 
-**Solution**: Use `pydantic-ai-slim[openai]` (or `[anthropic]`, `[groq]`, etc.) to install only the provider(s) you use.
+**Solution**: Use `pydantic-ai-slim[openai]` (or `[anthropic]`, `[groq]`, `[openrouter]`, etc.) to install only the provider(s) you need. Note: `[openrouter]` and other provider extras only exist on `pydantic-ai-slim`, not on the full `pydantic-ai` package.
 
 ### 5. Python 3.10 vs 3.11+
 
@@ -158,6 +164,7 @@ See `resources/09-observability.md` § "Langfuse v4 Breaking Changes" for full d
 |------|---------|---------------|
 | CrewAI agents + memory | `crewai>=1.10.0` | `crewai-tools` (unless you need specific tools) |
 | Pydantic AI with OpenAI | `pydantic-ai-slim[openai]` | `pydantic-ai` (pulls all providers) |
+| Pydantic AI with OpenRouter | `pydantic-ai-slim[openrouter]` (lean) or `pydantic-ai` (full) | — |
 | LangGraph orchestration | `langchain>=1.2.0` | `langgraph` separately (bundled in langchain 1.2+) |
 | Langfuse core tracing | `langfuse>=3.0.0` | — |
 | Langfuse + LangGraph | `langfuse>=3.0.0` + `langchain>=1.2.0` | `langchain-core` alone (won't work) |

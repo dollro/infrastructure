@@ -25,7 +25,7 @@ class HumanFeedback(BaseModel):
             raise ValueError("Revision requires revised_content")
 
 
-def human_approval_node(state: AgentState) -> dict:
+def human_approval_node(state: PipelineState) -> dict:
     """Node that pauses for human approval and validates input.
 
     The interrupt() call:

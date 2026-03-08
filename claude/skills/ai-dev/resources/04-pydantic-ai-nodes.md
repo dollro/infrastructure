@@ -31,12 +31,12 @@ class ResearchOutput(BaseModel):
 
 
 # === Agent Definition ===
+# Model is NOT specified here — passed at .run() time for flexibility and testability.
 
 research_agent = Agent(
-    'openai:gpt-4o',
     deps_type=ResearchDependencies,
-    result_type=ResearchOutput,
-    system_prompt="""You are a senior research analyst. Your task is to:
+    output_type=ResearchOutput,
+    instructions="""You are a senior research analyst. Your task is to:
     1. Analyze the user's query
     2. Search for relevant information
     3. Synthesize findings with source attribution
@@ -61,7 +61,7 @@ The adapter function bridges LangGraph state ↔ Pydantic AI context:
 3. **Map** results back to LangGraph state format (deflate)
 
 ```python
-async def pydantic_ai_research_node(state: AgentState) -> dict:
+async def pydantic_ai_research_node(state: PipelineState) -> dict:
     """Adapts LangGraph state to Pydantic AI context and back.
     CRITICAL: Implements Inflate/Deflate for serialization safety.
     """
@@ -83,13 +83,18 @@ async def pydantic_ai_research_node(state: AgentState) -> dict:
     deps = ResearchDependencies(search_api_key="sk-xxx", max_results=10)
 
     try:
-        result = await research_agent.run(query, deps=deps)
+        # Model passed at invocation — enables env-driven selection and testing
+        result = await research_agent.run(
+            query,
+            model=get_model("research"),  # From your model factory
+            deps=deps,
+        )
 
         artifact = ResearchArtifact(
             artifact_id=uuid4(),
             url="https://research.example.com/result",
-            summary="\n".join(result.data.findings),
-            relevance_score=result.data.confidence,
+            summary="\n".join(result.output.findings),
+            relevance_score=result.output.confidence,
             source_type="web",
             timestamp=datetime.now(),
         )
@@ -123,13 +128,12 @@ class AnalysisOutput(BaseModel):
 
 
 analyzer_agent = Agent(
-    'openai:gpt-4o',
-    result_type=AnalysisOutput,
-    system_prompt="You are a senior analyst. Synthesize insights, identify risks, recommend actions."
+    output_type=AnalysisOutput,
+    instructions="You are a senior analyst. Synthesize insights, identify risks, recommend actions."
 )
 
 
-async def pydantic_ai_analyzer_node(state: AgentState) -> dict:
+async def pydantic_ai_analyzer_node(state: PipelineState) -> dict:
     # INFLATE artifacts from state
     raw_artifacts = state.get("artifacts", [])
     artifacts = []
@@ -148,16 +152,19 @@ async def pydantic_ai_analyzer_node(state: AgentState) -> dict:
     ])
 
     try:
-        result = await analyzer_agent.run(f"Analyze:\n\n{artifact_summaries}")
+        result = await analyzer_agent.run(
+            f"Analyze:\n\n{artifact_summaries}",
+            model=get_model("analysis"),
+        )
 
         task_result = TaskResult(
             task_id=uuid4(), status="completed",
-            output=result.data.executive_summary,
-            confidence=result.data.confidence,
+            output=result.output.executive_summary,
+            confidence=result.output.confidence,
             metadata={
-                "insights_count": len(result.data.key_insights),
-                "risks_count": len(result.data.risk_factors),
-                "recommendations": result.data.recommendations,
+                "insights_count": len(result.output.key_insights),
+                "risks_count": len(result.output.risk_factors),
+                "recommendations": result.output.recommendations,
             }
         )
         # DEFLATE

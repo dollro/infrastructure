@@ -1,34 +1,74 @@
 # 09 — Observability
 
-## Two Integration Paths (Both Needed for LangGraph + CrewAI)
+## Three Integration Mechanisms
 
-### Path 1: CrewAI → Langfuse via OpenInference (OTel-Based)
+All three frameworks bridge to OpenTelemetry differently. Understanding this is critical for debugging trace gaps.
 
-Auto-instruments `crew.kickoff()`, agent tasks, and LLM calls. Zero code changes inside agent/task definitions. Must call `.instrument()` BEFORE any Crew is instantiated.
+| Framework | Mechanism | How spans reach your backend |
+|-|-|-|
+| Pydantic AI | `Agent.instrument_all()` | OTel auto-instruments all `.run()` / `.run_sync()` calls. No per-agent wiring needed. |
+| CrewAI | `CrewAIInstrumentor().instrument()` | OpenInference wraps CrewAI's LLM calls → emits OTel spans → your exporter picks them up. |
+| LangGraph | `CallbackHandler` | Langfuse/LangSmith LangChain callback passed to `graph.invoke(config={"callbacks": [h]})`. |
+
+### Idempotent Initialization
+
+Call `init_tracing()` once at pipeline entry point. The `@lru_cache` ensures it's safe to call repeatedly.
 
 ```python
+# src/observability/tracing.py
+import logging
+from functools import lru_cache
+
+from pydantic_ai import Agent
 from openinference.instrumentation.crewai import CrewAIInstrumentor
 
-# One-time global instrumentation — safe to call once at module load
-# skip_dep_check=True: avoids version check failures with newer CrewAI releases
-CrewAIInstrumentor().instrument(skip_dep_check=True)
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def init_tracing() -> bool:
+    """Idempotent tracing setup. Call once at pipeline entry point.
+
+    Returns True if tracing was enabled, False if credentials are missing.
+    """
+    from django.conf import settings  # Or your config system
+
+    if not settings.LANGFUSE_PUBLIC_KEY or not settings.LANGFUSE_SECRET_KEY:
+        logger.info("Tracing credentials not set — tracing disabled")
+        return False
+
+    # Backend setup: Langfuse v3+ auto-registers OTel exporter
+    from langfuse import get_client
+    get_client()
+
+    # Framework instrumentation (always do both)
+    Agent.instrument_all()                                # Pydantic AI → OTel spans
+    CrewAIInstrumentor().instrument(skip_dep_check=True)  # CrewAI → OTel spans
+
+    logger.info("Tracing initialized (Pydantic AI + CrewAI)")
+    return True
 ```
 
-### Path 2: LangGraph → Langfuse via LangChain CallbackHandler
+### LangGraph Callback Handler
 
-Captures graph node entry/exit, routing decisions, state transitions. Created fresh per pipeline invocation (not shared across threads).
+LangGraph uses LangChain's callback system, not OTel directly. Create a handler per pipeline invocation (not shared across threads).
 
 **DEPENDENCY NOTE**: `from langfuse.langchain import CallbackHandler` requires the **full `langchain` package** — not just `langchain-core`. The module does `import langchain` at load time to version-check. See `resources/15-dependencies.md` for details.
 
 ```python
-from langfuse.langchain import CallbackHandler as LangfuseCallbackHandler
+def get_tracing_callback():
+    """Return a CallbackHandler for LangGraph, or None if disabled.
 
-langfuse_handler = LangfuseCallbackHandler()
-config = {
-    "configurable": {"thread_id": document_id},
-    "callbacks": [langfuse_handler],
-}
-final_state = app.invoke(initial_state, config=config)
+    CRITICAL: Must be called INSIDE a propagate_attributes() context
+    so the handler inherits session_id automatically.
+    """
+    from django.conf import settings
+
+    if not settings.LANGFUSE_PUBLIC_KEY or not settings.LANGFUSE_SECRET_KEY:
+        return None
+
+    from langfuse.langchain import CallbackHandler
+    return CallbackHandler()
 ```
 
 ### Session Glue: `propagate_attributes`
@@ -105,28 +145,57 @@ Session: {document_id}
 
 ## Per-Round Tracing
 
-Wrap each iteration round in a span to get clean nesting:
+Wrap each iteration round in a span to get clean nesting. Use `start_as_current_span` (v4 preferred API — `start_as_current_observation` still works but `start_as_current_span` is the v4 way):
 
 ```python
 def run_crewai_refinement_round(state: DocumentRefinementState) -> dict:
     current_iter = state["iteration_count"] + 1
-    document_id = state["document_id"]
+    langfuse = get_client()
 
-    with langfuse.start_as_current_observation(
-        as_type="span",
+    # Read tracing context from LangGraph state (passed from orchestrator)
+    session_id = state.get("langfuse_session_id", "")
+    tags = state.get("langfuse_tags", [])
+
+    # ... build crew ...
+
+    with langfuse.start_as_current_span(
         name=f"refinement-round-{current_iter}",
     ):
         with propagate_attributes(
-            session_id=document_id,
-            tags=["pipeline", f"round-{current_iter}"],
+            session_id=session_id,
+            tags=tags + [f"round-{current_iter}"],
         ):
-            # ... create memory, agents, tasks, run crew
             result = crew.kickoff()
 
     return {... state update ...}
 ```
 
 Without the manual span, CrewAI's OTel spans would still be captured, but they'd be top-level traces disconnected from the LangGraph flow.
+
+### Passing Tracing Context Through LangGraph State
+
+The orchestrator creates the root span and sets `session_id` via `propagate_attributes`. But subgraph nodes (e.g. refinement rounds) need access to these values to re-establish context for their own spans. **Thread the tracing context explicitly through the graph state:**
+
+```python
+# In your TypedDict state:
+class RefinementState(TypedDict, total=False):
+    langfuse_session_id: str
+    langfuse_tags: list[str]
+    # ... other fields ...
+
+# Orchestrator passes them in:
+graph.invoke({
+    "langfuse_session_id": session_id or "",
+    "langfuse_tags": [mode, f"request-{request_id}"],
+    # ...
+})
+```
+
+This is necessary because `propagate_attributes` sets OTel context on the **current thread's `contextvars`**, and subgraph nodes may execute in different contexts.
+
+### `async_execution` Breaks Tracing (CRITICAL)
+
+CrewAI's `async_execution=True` runs tasks in `ThreadPoolExecutor` threads that **don't inherit OTel context**. This causes expert task spans to appear as orphan traces with `sessionId: null`. See `05-crewai-integration.md` for details and the fix (`async_execution=False`).
 
 ## Environment Variables
 

@@ -3,7 +3,8 @@
 ## Common Mistakes
 
 | Anti-Pattern | Problem | Solution |
-|--------------|---------|----------|
+|-|-|-|
+| Hardcoding model in `Agent('openai:gpt-4o', ...)` | Can't swap models per environment or test | Use model factory; pass model at `.run()` time |
 | `TypedDict` for complex values | No runtime validation | Use Pydantic models for domain objects |
 | Storing `Exception` in state | Pickle fallback, security risk | Store `ErrorSnapshot` Pydantic model |
 | Validating inside generator node | Conflated concerns, harder to debug | Separate Validator Node Topology |
@@ -12,6 +13,7 @@
 | Manual pickle serialization | Security vulnerability (RCE) | Use `JsonPlusSerializer(pickle_fallback=False)` |
 | No retry limit | Infinite loops on persistent errors | Always set `max_retries` in state |
 | Modifying state in place | Graph integrity issues | Return new state dict from nodes |
+| Putting iteration logic in parent graph | Clutters parent topology | Use a subgraph with its own state |
 | Reusing Crew across rounds | CrewAI mutates Crew during execution | Instantiate fresh Crew per round |
 | Shared mutable agents | Race conditions in concurrent execution | Module-level templates, per-run clones |
 | Writer reading expert critiques | Hedging, apologetic language | Memory scoping + prompt fencing (dual layer) |
@@ -21,7 +23,10 @@
 | `MemorySaver` in Celery | In-process memory, useless across workers | Use `PostgresSaver` or `None` |
 | `eventlet`/`gevent` pool with CrewAI | Conflicts with CrewAI's threading | Use `prefork` pool |
 | Installing `langchain-core` only for Langfuse | `CallbackHandler` does `import langchain` | Install full `langchain>=1.2` |
-| Using `pydantic-ai` (full) | Pulls ALL provider SDKs (~500MB) | Use `pydantic-ai-slim[openai]` |
+| Using `pydantic-ai` (full) when you only need one provider | Pulls ALL provider SDKs (~500MB+) | Use `pydantic-ai-slim[openrouter]` or `pydantic-ai-slim[openai]` |
+| Using LangChain messages in task pipelines | Unnecessary dependency, adds message overhead | Use pure `TypedDict(total=False)` with domain fields |
+| `TypedDict` without `total=False` | Forces verbose initialization factories | Use `total=False`, nodes return only changed fields |
+| Prompt-only constraint enforcement | LLMs ignore constraints ~10% of the time | Soft (prompt) + Hard (code) dual-layer enforcement |
 | Installing Langfuse before CrewAI | OTel resolves to 1.39.x, breaks CrewAI's ~=1.34.0 | Install CrewAI first or use lockfile |
 | Listing `langgraph` separately | `langchain>=1.2` already bundles langgraph | Let langchain pull it |
 | `span.update_trace(...)` in Langfuse v4 | Removed — `AttributeError` at runtime | Use `span.update(input=, output=)` + `propagate_attributes(trace_name=)` |
@@ -30,7 +35,9 @@
 
 1. **Minimize State Size** — Don't store full conversation history indefinitely. Summarize/compress older context. Use references (IDs) instead of full objects where possible.
 
-2. **Parallel Execution** — Use LangGraph's parallel branches for independent tasks. Use `async_execution=True` on CrewAI expert tasks.
+2. **Parallel Execution** — Use LangGraph's fan-out/fan-in for independent tasks (deterministic, full OTel context). CrewAI `async_execution=True` gives parallelism inside a crew but breaks OTel/Langfuse trace context (`ThreadPoolExecutor` doesn't inherit `contextvars`). **Trade-off is acceptable** when parallelism matters more than perfect trace linkage — output correctness is unaffected, only observability suffers. Use `async_execution=False` when you need every span linked.
+
+8. **Token Tracking** — Use `Annotated[int, operator.add]` reducers for `cumulative_tokens` across parallel nodes. Each node returns only its own delta; LangGraph applies the reducer. Track per-phase costs via `phase_token_usage: Annotated[dict, _merge_dicts]`.
 
 3. **Caching** — Cache expensive LLM calls with semantic similarity. Use LangGraph's built-in caching where available.
 

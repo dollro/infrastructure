@@ -76,19 +76,17 @@ Use with CrewAI: `output_pydantic=ModerationResult` on the Task. On parse failur
 from typing import Annotated, List, Optional, Union, Literal
 from typing_extensions import TypedDict
 import operator
-from langchain_core.messages import BaseMessage
 
 
-class AgentState(TypedDict):
+class PipelineState(TypedDict, total=False):
     """Central state object passed between all LangGraph nodes.
 
     Design Principles:
     1. TypedDict for the envelope (LangGraph compatibility)
     2. Pydantic models for complex values (validation)
     3. Annotated with reducer for append-only fields
+    4. total=False — nodes return only the keys they update
     """
-    # Append-only message history
-    messages: Annotated[List[BaseMessage], operator.add]
     # Append-only domain objects (Pydantic-validated)
     artifacts: Annotated[List[Union[ResearchArtifact, dict]], operator.add]
     task_results: Annotated[List[Union[TaskResult, dict]], operator.add]
@@ -124,11 +122,9 @@ class DocumentRefinementState(TypedDict):
 ### State Initialization Helper
 
 ```python
-def create_initial_state(user_message: str, max_retries: int = 3) -> AgentState:
+def create_initial_state(max_retries: int = 3) -> PipelineState:
     """Factory function for properly initialized state."""
-    from langchain_core.messages import HumanMessage
-    return AgentState(
-        messages=[HumanMessage(content=user_message)],
+    return PipelineState(
         artifacts=[], task_results=[], crew_outputs=[],
         memory=None, current_step="entry",
         retry_count=0, max_retries=max_retries,

@@ -28,7 +28,7 @@ def create_workflow() -> StateGraph:
                                                                ▼
                                                       (loops back to source)
     """
-    workflow = StateGraph(AgentState)
+    workflow = StateGraph(PipelineState)
 
     # Add nodes
     workflow.add_node("router", router_node)
@@ -95,12 +95,12 @@ def build_graph(checkpointer=None) -> StateGraph:
 ## Routing Functions
 
 ```python
-def route_after_router(state: AgentState) -> str:
+def route_after_router(state: PipelineState) -> str:
     """Determines next node based on state."""
     return state.get("next_action", "end")
 
 
-def route_after_validation(state: AgentState) -> Literal["success", "retry", "fatal"]:
+def route_after_validation(state: PipelineState) -> Literal["success", "retry", "fatal"]:
     """Routes based on validation results."""
     if state.get("last_error") is None:
         return "success"
@@ -109,7 +109,7 @@ def route_after_validation(state: AgentState) -> Literal["success", "retry", "fa
     return "retry"
 
 
-def route_after_fixer(state: AgentState) -> str:
+def route_after_fixer(state: PipelineState) -> str:
     """Routes fixer output back to the appropriate agent."""
     return state.get("current_step", "research")
 ```
@@ -146,7 +146,7 @@ class RouterDecision(BaseModel):
     requires_human_approval: bool = False
 
 
-def router_node(state: AgentState) -> dict:
+def router_node(state: PipelineState) -> dict:
     """Analyzes state and determines next action.
 
     Uses heuristics first (fast, deterministic), falls back to LLM

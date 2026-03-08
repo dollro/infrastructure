@@ -1,49 +1,69 @@
 # 05 — CrewAI Integration
 
-## Agent Definitions as Templates
+## Agent Templates (Frozen Dataclass Pattern)
 
-Define agents at module level as **templates**. They hold configuration (role, goal, backstory) but NO per-run state. Memory scoping is applied per-run via factory functions.
+**CRITICAL**: CrewAI `Agent` objects mutate internal state during `kickoff()`. Never reuse agents across rounds. Define immutable templates as frozen dataclasses and clone fresh agents per round.
 
 ```python
-# src/nodes/crewai/agents.py
+# pipeline/interview/crews.py
+from dataclasses import dataclass
 from crewai import Agent
+from pipeline.models import get_crewai_llm
 
 
-# Module-level templates — safe for concurrent access, never mutated
-expert_a = Agent(
-    role="Senior Systems Architect",
-    goal="Identify technical flaws, scalability bottlenecks, and security risks",
-    backstory=(
-        "You are a cynical senior engineer with 20 years of experience. "
-        "You focus relentlessly on what could go wrong."
-    ),
-    allow_delegation=False,   # Prevents sub-agent spawning (saves LLM calls)
-    # max_iter=10,            # Cap reasoning loops to control cost
-    # llm="gpt-4o-mini",     # Cheaper model for structured critique
-    verbose=True,
+@dataclass(frozen=True)
+class AgentTemplate:
+    """Immutable agent definition. No LLM coupling, no per-run state."""
+    role: str
+    goal: str
+    backstory: str
+
+
+# Module-level templates — safe for concurrent access, truly immutable
+expert_ats = AgentTemplate(
+    role="ATS & Compliance Specialist",
+    goal="Ensure keyword density, formatting compliance, and employment gap handling",
+    backstory="You review thousands of CVs annually for ATS optimization...",
 )
 
-moderator = Agent(
+expert_impact = AgentTemplate(
+    role="Technical Impact Assessor",
+    goal="Maximize quantified achievements using STAR method, technical depth",
+    backstory="You evaluate technical contributions for impact and specificity...",
+)
+
+expert_clarity = AgentTemplate(
+    role="Communication & Authenticity Auditor",
+    goal="Ensure readability, authentic voice, jargon-free clarity",
+    backstory="You audit professional documents for clear communication...",
+)
+
+moderator = AgentTemplate(
     role="Editorial Chief",
-    goal="Harmonize conflicting expert feedback into a single revision plan",
-    backstory=(
-        "You are a master of diplomacy and editorial judgment. "
-        "When experts contradict each other, you weigh arguments and make a call."
-    ),
-    allow_delegation=False,
-    verbose=True,
-    # llm="claude-sonnet-4-20250514",  # Strongest model for the moderator
+    goal="Resolve conflicting expert feedback into a single coherent revision plan",
+    backstory="You synthesize competing perspectives and make editorial decisions...",
 )
 
-writer = Agent(
-    role="Technical Document Specialist",
-    goal="Rewrite the document strictly based on the provided revision plan",
-    backstory=(
-        "You follow revision plans to the letter and never inject your own opinions."
-    ),
-    allow_delegation=False,
-    verbose=True,
+writer = AgentTemplate(
+    role="Professional CV Writer",
+    goal="Execute revision instructions with precision and consistency",
+    backstory="You apply targeted text revisions while preserving voice...",
 )
+
+EXPERT_AGENTS = [expert_ats, expert_impact, expert_clarity]
+
+
+def _clone_agent(template: AgentTemplate, llm, memory=None) -> Agent:
+    """Create a fresh CrewAI Agent from an immutable template."""
+    return Agent(
+        role=template.role,
+        goal=template.goal,
+        backstory=template.backstory,
+        llm=llm,
+        memory=memory,
+        verbose=False,
+        allow_delegation=False,
+    )
 ```
 
 ### Agent Tuning Guide
@@ -118,7 +138,23 @@ moderation_task = Task(
 )
 ```
 
-**Note**: `async_execution=True` uses threads. Generally stable with 3 tasks on separate agents. If flaky (missed/duplicated output), set `False` as fallback.
+**⚠️ `async_execution=True` breaks OTel/Langfuse context propagation.**
+
+CrewAI's `async_execution=True` uses `ThreadPoolExecutor`. Python's `ThreadPoolExecutor` reuses worker threads that **do not inherit the calling thread's `contextvars`** (OTel context). Consequence: spans from async tasks lose `session_id`, `tags`, and parent trace — they appear as orphan top-level traces in Langfuse.
+
+**Symptoms**: Multiple disconnected `*._execute_core` traces per run instead of one unified trace. Async tasks have `sessionId: null` and no tags. Synchronous tasks (moderator, writer) trace correctly.
+
+**Recommendation**: Use `async_execution=False` when observability matters. The sequential overhead is small (~20-30s per round for 3 experts) compared to the debugging cost of orphaned traces. If parallel execution is critical, you'd need manual OTel context propagation into worker threads, which CrewAI doesn't support natively.
+
+```python
+# WRONG — breaks OTel context
+task = Task(description="...", agent=expert, async_execution=True)
+
+# CORRECT — preserves OTel context
+task = Task(description="...", agent=expert, async_execution=False)
+```
+
+**Legacy note**: `async_execution=True` is generally stable for output correctness with 3 tasks on separate agents. The issue is purely observability — if you don't use OTel/Langfuse tracing, async is fine.
 
 ## Per-Round Crew Instantiation (CRITICAL)
 
@@ -197,7 +233,7 @@ class ContentCreationCrew:
     def __init__(self):
         self.agents = create_content_agents()
 
-    def kickoff(self, state: AgentState) -> dict:
+    def kickoff(self, state: PipelineState) -> dict:
         """Extract state → run crew → return state update."""
         # ... (extract context, create tasks, run crew)
         # DEFLATE outputs
@@ -211,11 +247,11 @@ class ContentCreationCrew:
 # Singleton adapter
 _content_crew = ContentCreationCrew()
 
-def crewai_content_crew_node(state: AgentState) -> dict:
+def crewai_content_crew_node(state: PipelineState) -> dict:
     return _content_crew.kickoff(state)
 
 # Async variant (CrewAI's kickoff is synchronous)
-async def crewai_content_crew_node_async(state: AgentState) -> dict:
+async def crewai_content_crew_node_async(state: PipelineState) -> dict:
     import asyncio
     return await asyncio.to_thread(_content_crew.kickoff, state)
 ```

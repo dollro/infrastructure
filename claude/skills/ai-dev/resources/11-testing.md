@@ -4,10 +4,21 @@
 
 TestModel replaces the real LLM with a deterministic simulator, allowing testing of node logic without network calls or costs.
 
+**IMPORTANT**: Disable real model requests globally in your test suite to prevent accidental API calls:
+
+```python
+# tests/conftest.py (or top of test module)
+from pydantic_ai import models
+models.ALLOW_MODEL_REQUESTS = False  # Any real API call raises an error
+```
+
 ```python
 # tests/unit/test_pydantic_ai_nodes.py
 import pytest
+from pydantic_ai import models, capture_run_messages
 from pydantic_ai.models.test import TestModel
+
+models.ALLOW_MODEL_REQUESTS = False
 
 
 @pytest.mark.asyncio
@@ -22,7 +33,7 @@ async def test_research_node_produces_valid_artifact():
         suggested_followup="Investigate alignment techniques",
     )
 
-    mock_model = TestModel(custom_result_args=mock_output.model_dump())
+    mock_model = TestModel(custom_output_args=mock_output.model_dump())
 
     with research_agent.override(model=mock_model):
         result = await pydantic_ai_research_node(state)
@@ -40,13 +51,38 @@ async def test_research_node_produces_valid_artifact():
 async def test_research_node_handles_llm_error():
     """Gracefully handle LLM failures."""
     state = create_initial_state("Test query")
-    mock_model = TestModel(custom_result_text="invalid json{{{")
+    mock_model = TestModel(custom_output_text="invalid json{{{")
 
     with research_agent.override(model=mock_model):
         result = await pydantic_ai_research_node(state)
 
     assert result.get("last_error") is not None
     assert result.get("retry_count", 0) > 0
+```
+
+## Inspecting Agent Messages with `capture_run_messages`
+
+Use `capture_run_messages` to inspect the full request/response exchange — useful for verifying tool calls, system prompts, and message ordering:
+
+```python
+from pydantic_ai import capture_run_messages
+from pydantic_ai.models.test import TestModel
+from pydantic_ai.messages import SystemPromptPart, UserPromptPart, ToolCallPart
+
+
+@pytest.mark.asyncio
+async def test_research_agent_message_flow():
+    mock_model = TestModel()
+    with capture_run_messages() as messages:
+        with research_agent.override(model=mock_model):
+            await pydantic_ai_research_node(create_initial_state("AI safety"))
+
+    # Verify system prompt was sent
+    assert any(
+        isinstance(p, SystemPromptPart)
+        for msg in messages for p in msg.parts
+        if hasattr(msg, 'parts')
+    )
 ```
 
 ## Integration Testing with InMemorySaver

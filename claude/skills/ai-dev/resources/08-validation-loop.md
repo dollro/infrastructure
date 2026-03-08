@@ -15,7 +15,7 @@ Generator → Validator → Router → Fixer (if error) → Generator
 from pydantic import ValidationError
 
 
-def validator_node(state: AgentState) -> dict:
+def validator_node(state: PipelineState) -> dict:
     """Validates outputs from the previous node.
 
     IMPORTANT: Modern LLM "Structured Output" modes guarantee JSON syntax
@@ -116,7 +116,7 @@ def _to_ordinal(n: int) -> str:
 Constructs a specific correction prompt from validation errors:
 
 ```python
-def fixer_node(state: AgentState) -> dict:
+def fixer_node(state: PipelineState) -> dict:
     """Provides correction guidance for failed validations."""
     from langchain_core.messages import HumanMessage
 
